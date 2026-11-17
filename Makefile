@@ -139,6 +139,9 @@ build-all: clean
 # Install to ~/.local/bin
 install: build
 	@mkdir -p $(HOME)/.local/bin
+	@# Remove first, then copy: overwriting the file in place while a csm is
+	@# running makes macOS kill every new run of it (exit 137).
+	rm -f $(HOME)/.local/bin/csm
 	cp csm $(HOME)/.local/bin/csm
 	@echo "Installed to $(HOME)/.local/bin/csm"
 
