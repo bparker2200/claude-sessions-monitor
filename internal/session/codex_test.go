@@ -410,3 +410,14 @@ func TestCodexSessionIDFromLogFile(t *testing.T) {
 		t.Error("a short name should come back whole")
 	}
 }
+
+// The desktop app's ChatGPT-project folders are named by id; the real name is
+// not on disk, so the project cell is blank rather than the id.
+func TestCodexInternalFolderIsNotAProjectName(t *testing.T) {
+	if !codexInternalFolder("/Users/u/.codex/.chatgpt-projects/g-p-68f9896f638c8191") {
+		t.Error("a ChatGPT project folder was taken for a project name")
+	}
+	if codexInternalFolder("/Users/u/Projects/app") {
+		t.Error("an ordinary folder was blanked")
+	}
+}

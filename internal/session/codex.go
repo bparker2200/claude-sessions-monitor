@@ -662,6 +662,15 @@ func discoverCodex(procs []harnessProcess, liveFiles map[string]struct{}) []Sess
 	return sessions
 }
 
+// codexInternalFolder reports whether a working directory is one the Codex
+// desktop app made for a ChatGPT project (~/.codex/.chatgpt-projects/g-p-<hex>).
+// Its name is an id, and the project's real name is not on disk -- the folder's
+// metadata lists files only -- so the project cell is left blank rather than
+// showing the id.
+func codexInternalFolder(cwd string) bool {
+	return strings.Contains(filepath.ToSlash(cwd), "/.chatgpt-projects/")
+}
+
 // buildCodexSession turns one parsed rollout into a Session.
 //
 // Deliberately left zero: ContextPercent, ContextTokens and ContextWindow --
@@ -688,8 +697,9 @@ func buildCodexSession(l logCandidate, pl codexParsedLog, parseErr error, runnin
 		SessionTitle: names[id],
 		LastActivity: l.modTime,
 	}
-	if pl.cwd == "" {
-		s.Project = "codex"
+	if pl.cwd == "" || codexInternalFolder(pl.cwd) {
+		// Not a project anyone named: see codexInternalFolder.
+		s.Project = "—"
 	}
 	if !pl.lastEntryTime.IsZero() {
 		s.LastActivity = pl.lastEntryTime

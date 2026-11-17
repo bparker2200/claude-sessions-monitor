@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"fmt"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -375,5 +378,87 @@ func TestContextBarMarksAnExtendedWindow(t *testing.T) {
 	standard.ContextWindow = session.DefaultContextWindow
 	if got := stripANSI(formatContext(standard, 30)); strings.Contains(got, "(1M)") {
 		t.Errorf("context cell %q claims a 1M window for a 200K session", got)
+	}
+}
+
+// When the sessions do not fit, the top of the list -- where Needs you sorts --
+// is shown, and the window moves down only as far as the selected row needs.
+func TestFitRowsKeepsTheTopAndTheSelection(t *testing.T) {
+	heights := []int{3, 3, 3, 3, 3} // 15 lines of sessions
+	for _, tc := range []struct {
+		name               string
+		budget, selected   int
+		wantStart, wantEnd int
+	}{
+		{"everything fits", 15, -1, 0, 5},
+		{"no selection keeps the top", 10, -1, 0, 3},         // 3 blocks (9) + "more below" (1)
+		{"selection on screen stays put", 10, 2, 0, 3},       // already visible
+		{"selection below scrolls just enough", 10, 4, 2, 5}, // "↑ 2 more" (1) + 3 blocks (9)
+		{"a block taller than the window still shows", 2, -1, 0, 1},
+	} {
+		start, end := fitRows(heights, tc.budget, tc.selected)
+		if start != tc.wantStart || end != tc.wantEnd {
+			t.Errorf("%s: rows [%d,%d), want [%d,%d)", tc.name, start, end, tc.wantStart, tc.wantEnd)
+		}
+		if tc.selected >= 0 && (tc.selected < start || tc.selected >= end) {
+			t.Errorf("%s: selected row %d is off screen, so Enter would jump to a session you cannot see", tc.name, tc.selected)
+		}
+	}
+}
+
+// The whole live frame fits the window: the title and the Needs you count stay
+// on screen however many sessions there are. Rendered with no terminal attached,
+// so the height is the default.
+func TestRenderLiveFitsTheWindow(t *testing.T) {
+	var sessions []session.Session
+	for i := range 30 {
+		sessions = append(sessions, session.Session{
+			Project: "p", Status: session.StatusWaiting, Harness: session.HarnessClaude,
+			SessionID: fmt.Sprintf("%08d-0000", i), LastMessage: "Done.", LastActivity: time.Now(),
+		})
+	}
+	sessions[29].Status = session.StatusNeedsInput
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout := os.Stdout
+	os.Stdout = w
+	RenderLive(LiveView{Sessions: sessions, Selected: -1})
+	os.Stdout = stdout
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+
+	frame := stripANSI(string(out))
+	if lines := strings.Count(frame, "\r\n"); lines > getTerminalHeight()-1 {
+		t.Errorf("frame is %d lines in a %d-line window; its top scrolls away", lines, getTerminalHeight())
+	}
+	if !strings.Contains(frame, "Coding Sessions") || !strings.Contains(frame, "Needs you: 1") {
+		t.Error("the title or the Needs you count is missing from the frame")
+	}
+	if !strings.Contains(frame, "more") {
+		t.Error("sessions were left off with nothing saying so")
+	}
+}
+
+// Replies are written in markdown; the one-line summary should read as text.
+func TestPlainTextDropsEmphasisAndCodeMarks(t *testing.T) {
+	got := plainText("**No repair build.** Run `make install`, keep __init__.")
+	if want := "No repair build. Run make install, keep __init__."; got != want {
+		t.Errorf("plainText = %q, want %q", got, want)
+	}
+}
+
+// Every blank cell reads the same.
+func TestBlankCellsUseTheSameMark(t *testing.T) {
+	if got := strings.TrimSpace(stripANSI(formatContext(session.Session{}, fixedContextWidth))); got != "—" {
+		t.Errorf("empty context cell = %q, want —", got)
+	}
+	if got := strings.TrimSpace(stripANSI(formatProject(session.Session{}, 20, false))); got != "—" {
+		t.Errorf("empty project cell = %q, want —", got)
+	}
+	if got := visibleWidth(formatContext(session.Session{}, fixedContextWidth)); got != fixedContextWidth {
+		t.Errorf("empty context cell is %d wide, want %d", got, fixedContextWidth)
 	}
 }

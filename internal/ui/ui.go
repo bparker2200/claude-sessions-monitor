@@ -224,12 +224,30 @@ func RenderLive(v LiveView) {
 		fmt.Fprintf(&buf, "%s%s", sessionHeader(l, unselectedMarker), rawNewline)
 		fmt.Fprintf(&buf, "%s%s", strings.Repeat("─", l.totalWidth), rawNewline)
 
+		// Each session block is rendered on its own first, so its height is
+		// known before deciding how many fit.
+		blocks := make([]string, len(active))
+		heights := make([]int, len(active))
 		for i, s := range active {
 			marker := unselectedMarker
 			if i == v.Selected {
 				marker = selectedMarker
 			}
-			renderSessionRow(&buf, s, l, rawNewline, marker, v.Mixed)
+			var b strings.Builder
+			renderSessionRow(&b, s, l, rawNewline, marker, v.Mixed)
+			blocks[i] = b.String()
+			heights[i] = strings.Count(blocks[i], rawNewline)
+		}
+
+		start, end := fitRows(heights, getTerminalHeight()-liveChromeLines(v), v.Selected)
+		if start > 0 {
+			writeMoreLine(&buf, "↑", active[:start])
+		}
+		for _, b := range blocks[start:end] {
+			buf.WriteString(b)
+		}
+		if end < len(active) {
+			writeMoreLine(&buf, "↓", active[end:])
 		}
 	}
 
@@ -269,6 +287,99 @@ func RenderLive(v LiveView) {
 	}
 
 	fmt.Print(buf.String())
+}
+
+// liveChromeLines is how many lines the live view spends on everything but
+// the session rows: the title, counts and column header above them, and the
+// service status, feedback and key help below. RenderLive writes exactly
+// these; a line added to either must be counted here, or the frame outgrows
+// the window and its top scrolls away.
+func liveChromeLines(v LiveView) int {
+	n := 6 // title, blank, counts, blank, column header, rule
+	n += 3 // blank, Claude status, key help
+	if v.ActionMsg != "" {
+		n++
+	}
+	if v.UpdateNotice != "" {
+		n++
+	}
+	// The last line ends in a newline too, which moves the cursor onto a
+	// line of its own; a frame exactly as tall as the window would scroll
+	// its title off by one.
+	n++
+	return n
+}
+
+// fitRows chooses which session blocks the live view shows, given each
+// block's height and the lines left for them. Everything is shown when it
+// fits. Otherwise the window starts at the top -- where Needs you sorts --
+// and moves down only as far as it must to keep the selected row on screen,
+// leaving a line for each "more" marker it needs. At least one block is
+// always shown, even when it alone is taller than the budget.
+func fitRows(heights []int, budget, selected int) (start, end int) {
+	total := 0
+	for _, h := range heights {
+		total += h
+	}
+	if total <= budget {
+		return 0, len(heights)
+	}
+	room := func(start, end int) int {
+		r := budget
+		if start > 0 {
+			r--
+		}
+		if end < len(heights) {
+			r--
+		}
+		return r
+	}
+	extend := func(start int) int {
+		end, used := start, 0
+		for end < len(heights) && used+heights[end] <= room(start, end+1) {
+			used += heights[end]
+			end++
+		}
+		if end == start {
+			end = start + 1
+		}
+		return end
+	}
+	end = extend(0)
+	for selected >= end && start < selected {
+		start++
+		end = extend(start)
+	}
+	return start, end
+}
+
+// writeMoreLine reports the sessions a fitted list left off screen. It names
+// how many of them need you, in red: those sort first, so they are hidden
+// only when the user has scrolled down past them, and they must not vanish
+// silently.
+func writeMoreLine(buf *strings.Builder, arrow string, hidden []session.Session) {
+	needs := 0
+	for _, s := range hidden {
+		if s.Status == session.StatusNeedsInput {
+			needs++
+		}
+	}
+	text := fmt.Sprintf("  %s %d more", arrow, len(hidden))
+	if needs > 0 {
+		fmt.Fprintf(buf, "%s%s%s, %s%d need you%s%s", Dim, text, Reset, Red, needs, Reset, rawNewline)
+		return
+	}
+	fmt.Fprintf(buf, "%s%s — make the window taller, or use ↑↓%s%s", Dim, text, Reset, rawNewline)
+}
+
+// markdownMarks are the emphasis and code marks agents put in replies. On a
+// one-line summary they are noise: "**No repair build.**" reads as asterisks.
+// Underscores are left alone, because __init__ and snake_case are names.
+var markdownMarks = strings.NewReplacer("**", "", "`", "")
+
+// plainText drops markdownMarks from a reply for the last-turn line.
+func plainText(s string) string {
+	return markdownMarks.Replace(s)
 }
 
 // emptyLiveMessage is what the live view says when it has no rows to draw.
@@ -519,11 +630,7 @@ const contextBarWidth = 10
 // Example: "████████░░ 80%"
 func formatContext(s session.Session, width int) string {
 	if s.ContextTokens == 0 {
-		text := "-"
-		if len(text) < width {
-			text += strings.Repeat(" ", width-len(text))
-		}
-		return Dim + text + Reset
+		return padCell(Dim+blank+Reset, 1, width)
 	}
 
 	// Clamp percentage to 0-100
@@ -762,7 +869,7 @@ func renderSessionRow(buf *strings.Builder, s session.Session, l sessionLayout, 
 
 	// Second line: the session's last reply, falling back to what it is doing
 	// when it has not replied yet. Sanitized: it is log content.
-	desc := sanitizeForTerminal(s.LastMessage)
+	desc := plainText(sanitizeForTerminal(s.LastMessage))
 	if desc == "" {
 		desc = sanitizeForTerminal(s.Task)
 	}
@@ -869,6 +976,9 @@ func agentName(h session.Harness) string {
 func formatProject(s session.Session, maxLen int, showHarness bool) string {
 	// Sanitize to prevent ANSI escape injection from log/filesystem content
 	name := sanitizeForTerminal(s.Project)
+	if name == "" {
+		name = blank
+	}
 	var suffixes []string
 	var suffixLens []int // visible length of each suffix (excluding space)
 
