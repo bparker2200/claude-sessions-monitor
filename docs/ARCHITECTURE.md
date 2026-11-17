@@ -10,6 +10,7 @@ decision, and that comment is the authority if the two ever disagree.
 ```
 ~/.claude/projects/<encoded-cwd>/<session>.jsonl  ──►  discoverClaude()  ─┐
 ~/.omp/agent/sessions/<encoded-cwd>/<ts>_<id>.jsonl ─►  discoverOMP()  ───┤
+~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl ───────►  discoverCodex() ──┤
                                                                           │
 the OS process table  ──►  classifyProcess()  ──►  both above  ───────────┤
                                                     []session.Session  ◄──┘
@@ -227,6 +228,52 @@ the exception that is *not* blank: omp writes each bash command into its
 `tool_execution_start` entry, so the command rules apply — see
 [Flags](#flags-flagsgo-flags_commandgo-flags_ompgo-shellgo-flagfeedgo).
 
+### Codex discovery and status (`codex.go`)
+
+Fork-only for now. `codexSessionsDir()` is `$CODEX_HOME/sessions` or
+`~/.codex/sessions`, overridable with `CSM_CODEX_SESSIONS_DIR`. Rollouts sit in
+the folder of the day the session *started*, so `listCodexRollouts` walks the
+last 30 day folders by name and keeps files written within 7 days. Names come
+from `session_index.jsonl` (newest line per id wins), read only when it
+changes. Nothing else under `~/.codex` is read: not `auth.json`, not the config,
+not the SQLite databases.
+
+The format is undocumented and changed between 0.163 and 0.167; the file's
+header comment records what was measured. The facts the rules rest on, checked
+live on 0.167 with `codex -a on-request`:
+
+- While an approval prompt is up, the `custom_tool_call` is on disk and its
+  `_output` is not. Codex writes no "approval requested" entry anywhere, so that
+  dangling call is the only evidence.
+- Refusing the prompt (Esc) writes the output and then `turn_aborted`
+  (`reason: "interrupted"`) — the same as an interrupt.
+- `turn_context.approval_policy` says whether a prompt can happen at all.
+
+`determineCodexStatus`, in order: not running → Inactive; an open call in an
+unfinished turn → Working under policy `never` however long, otherwise Working
+under 2m and **Needs Input** after (the only producer); the newest turn ended →
+Waiting; then `ageStatus`.
+
+Pairing, with no help from Codex — it writes no pid:
+
+- Terminal and headless sessions pair by folder with a `codex` process, as
+  Claude Code did before its registry: N processes in a folder make its N
+  newest rollouts running. The rollout and its lock in
+  `thread-writer-locks/` are no use: a terminal session often hands both to the
+  shared `codex app-server`, which kept them for minutes after the terminal
+  quit, and released the lock at an arbitrary later point.
+- `classifyProcess` rejects `codex app-server` / `mcp-server` (any argv
+  element) for that reason, and `codex-code-mode-host` never passes the comm
+  prefilter.
+- Desktop sessions (originator containing "desktop") have no process of their
+  own. `identifyHarnessProcs` marks the `ChatGPT` / `Codex` app process as a
+  `desktopHost`; while one runs, desktop sessions written within 24h are
+  running. Their origin is fixed as Codex Desktop.
+
+Left blank on a Codex row: context (Codex's footer showed 4% where the plain
+ratio of its token counts gave 8.1%, so its formula is not the ratio), branch
+(the header records the start branch only), flags and subagents.
+
 ### Processes, ghosts and the pairing pitfall
 
 A process is identified in two steps, in `harness.go`. `harnessCandidate`
@@ -368,7 +415,8 @@ see [Writing tests](#writing-tests).
 
 Reads: `~/.claude/projects/` (logs, `sessions-index.json`),
 `~/.omp/agent/sessions/` (logs) and `~/.omp/agent/terminal-sessions/`
-(breadcrumbs), the OAuth token from the macOS Keychain item
+(breadcrumbs), `~/.codex/sessions/` (rollouts) and `~/.codex/session_index.jsonl`
+(names), the OAuth token from the macOS Keychain item
 `Claude Code-credentials` or `~/.claude/.credentials.json` on Linux
 (`oauth.go`), and `~/.claude.json` for the signed-in account's email — read
 only to pick between several omp accounts, so a machine with one never parses

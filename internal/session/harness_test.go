@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -431,5 +432,22 @@ func TestMixedHarnessesIgnoresUnattributedSessions(t *testing.T) {
 		{Harness: HarnessNone, LastActivity: now},
 	}) {
 		t.Error("an unattributed session counted as a second agent")
+	}
+}
+
+// The `f` key cycles the agents this machine has run lately, in roster order,
+// and never one it has not: stopping on an agent with no sessions shows an
+// empty list for no reason.
+func TestRecentHarnessesListsOnlyAgentsRunLately(t *testing.T) {
+	now := time.Now()
+	got := RecentHarnesses([]Session{
+		{Harness: HarnessOMP, LastActivity: now.Add(-2 * HarnessBadgeHorizon)}, // too long ago
+		{Harness: HarnessCodex, LastActivity: now},
+		{Harness: HarnessClaude, LastActivity: now.Add(-time.Hour)},
+		{Harness: HarnessNone, LastActivity: now},
+	})
+	want := []Harness{HarnessClaude, HarnessCodex}
+	if !slices.Equal(got, want) {
+		t.Errorf("RecentHarnesses = %v, want %v", got, want)
 	}
 }

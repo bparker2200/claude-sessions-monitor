@@ -154,22 +154,24 @@ func TestUpgradeRefusesFlagsItCannotHonour(t *testing.T) {
 	}
 }
 
-// The harness filter (`f`, where the footer offers it) walks every agent and
-// then returns to showing all of them. A cycle that skips an agent, or never
-// comes back to "", leaves rows hidden with no key that brings them back.
+// The harness filter (`f`, where the footer offers it) walks every agent this
+// machine runs and then returns to showing all of them. A cycle that skips an
+// agent, or never comes back to "", leaves rows hidden with no key that brings
+// them back.
 //
 // The agents are named here rather than read from session.Harnesses: deriving
 // the expectation from the same slice the code walks would pass even if an
 // agent were dropped from it.
 func TestHarnessFilterCyclesEveryAgentAndBackToAll(t *testing.T) {
+	present := []session.Harness{session.HarnessClaude, session.HarnessCodex, session.HarnessOMP}
 	var seen []session.Harness
 	current := session.Harness("")
-	for range len(session.Harnesses()) + 1 {
-		current = nextHarnessFilter(current)
+	for range len(present) + 1 {
+		current = nextHarnessFilter(current, present)
 		seen = append(seen, current)
 	}
 
-	for _, want := range []session.Harness{session.HarnessClaude, session.HarnessOMP} {
+	for _, want := range present {
 		if !slices.Contains(seen, want) {
 			t.Errorf("the %q filter is unreachable: pressing f never selects it, so its rows cannot be brought back", want)
 		}
@@ -181,19 +183,22 @@ func TestHarnessFilterCyclesEveryAgentAndBackToAll(t *testing.T) {
 
 // The membership test above passes for a ring stepped by two, or for a
 // reversed cycle, or for an unlisted harness landing anywhere but the first
-// roster entry. Pin the mapping itself.
+// entry. Pin the mapping itself -- and that an agent this machine does not run
+// is skipped, rather than offered as an empty list.
 func TestNextHarnessFilterMapping(t *testing.T) {
+	present := []session.Harness{session.HarnessClaude, session.HarnessCodex}
 	tests := []struct {
 		current session.Harness
 		want    session.Harness
 	}{
 		{"", session.HarnessClaude},
-		{session.HarnessClaude, session.HarnessOMP},
-		{session.HarnessOMP, ""},
+		{session.HarnessClaude, session.HarnessCodex},
+		{session.HarnessCodex, ""},
+		{session.HarnessOMP, session.HarnessClaude}, // no longer present: restart
 		{session.Harness("unknown"), session.HarnessClaude},
 	}
 	for _, tt := range tests {
-		if got := nextHarnessFilter(tt.current); got != tt.want {
+		if got := nextHarnessFilter(tt.current, present); got != tt.want {
 			t.Errorf("nextHarnessFilter(%q) = %q, want %q", tt.current, got, tt.want)
 		}
 	}

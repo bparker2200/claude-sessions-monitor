@@ -588,14 +588,23 @@ func padCell(cell string, visible, width int) string {
 	return cell
 }
 
+// ownDesktopApp maps each agent to the origin slug of its own desktop app.
+var ownDesktopApp = map[session.Harness]string{
+	session.HarnessClaude: "claude-desktop",
+	session.HarnessCodex:  "codex-desktop",
+}
+
 // originWhere is the "where" half of the origin cell: the app the session runs
-// in. A desktop app is shortened to "Desktop", because the agent half already
-// names whose desktop it is ("Claude · Desktop", not "Claude · Claude Desktop").
-func originWhere(o session.Origin) string {
-	if o.Category == session.OriginDesktop {
+// in. The agent's *own* desktop app is shortened to "Desktop", because the
+// agent half already names it ("Claude · Desktop", not "Claude · Claude
+// Desktop"). Another agent's desktop app keeps its name: a Codex session in
+// Claude Desktop's terminal is not the Codex desktop app, and shortening both
+// to "Desktop" made the two read the same.
+func originWhere(s session.Session) string {
+	if app, ok := ownDesktopApp[s.Harness]; ok && s.Origin.App == app {
 		return "Desktop"
 	}
-	return o.Display
+	return s.Origin.Display
 }
 
 // formatOrigin renders the origin cell as "Agent · Where", padded to exactly
@@ -610,7 +619,7 @@ func formatOrigin(s session.Session, width int) string {
 	}
 
 	agent := agentName(s.Harness)
-	where := sanitizeForTerminal(originWhere(s.Origin))
+	where := sanitizeForTerminal(originWhere(s))
 
 	var color string
 	switch s.Origin.Category {
@@ -834,6 +843,8 @@ func harnessLabel(h session.Harness) string {
 		return "cc"
 	case session.HarnessOMP:
 		return "omp"
+	case session.HarnessCodex:
+		return "codex"
 	default:
 		return string(h)
 	}
@@ -845,6 +856,8 @@ func agentName(h session.Harness) string {
 	switch h {
 	case session.HarnessClaude:
 		return "Claude"
+	case session.HarnessCodex:
+		return "Codex"
 	case session.HarnessOMP:
 		return "omp"
 	default:

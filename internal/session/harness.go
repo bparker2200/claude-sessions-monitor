@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -28,21 +27,15 @@ const (
 	HarnessClaude Harness = "claude"
 	// HarnessOMP is Oh My Pi, logging to ~/.omp/agent/sessions.
 	HarnessOMP Harness = "omp"
+	// HarnessCodex is OpenAI's Codex CLI and desktop app, logging rollouts to
+	// ~/.codex/sessions.
+	HarnessCodex Harness = "codex"
 )
 
 // harnesses is every coding agent csm knows, in the order surfaces offer them.
-var harnesses = []Harness{HarnessClaude, HarnessOMP}
-
-// Harnesses returns that list. A surface that enumerates agents calls this
-// rather than spelling the set again: the live view's filter cycles it, and an
-// agent added here becomes reachable there instead of gaining a badge it can
-// never be filtered to.
-//
-// A copy, so a caller cannot reorder or truncate the roster every other surface
-// reads.
-func Harnesses() []Harness {
-	return slices.Clone(harnesses)
-}
+// RecentHarnesses filters it, so an agent added here becomes reachable from the
+// live view's filter as soon as it has a session.
+var harnesses = []Harness{HarnessClaude, HarnessCodex, HarnessOMP}
 
 // String names the harness for a human. The zero value has to read as
 // something, because it appears in the reason a ghost was not signalled.
@@ -81,22 +74,28 @@ const HarnessBadgeHorizon = 7 * 24 * time.Hour
 // Sessions csm could not attribute to an agent are ignored rather than counted
 // as a third kind.
 func MixedHarnesses(sessions []Session) bool {
-	cutoff := time.Now().Add(-HarnessBadgeHorizon)
+	return len(RecentHarnesses(sessions)) > 1
+}
 
-	var first Harness
+// RecentHarnesses returns the agents with a session active within
+// HarnessBadgeHorizon, in roster order. The live view's filter cycles these
+// rather than the whole roster, so `f` never stops on an agent this machine
+// does not run and shows an empty list.
+func RecentHarnesses(sessions []Session) []Harness {
+	cutoff := time.Now().Add(-HarnessBadgeHorizon)
+	seen := make(map[Harness]bool)
 	for _, s := range sessions {
-		if s.Harness == HarnessNone || s.LastActivity.Before(cutoff) {
-			continue
-		}
-		if first == HarnessNone {
-			first = s.Harness
-			continue
-		}
-		if s.Harness != first {
-			return true
+		if s.Harness != HarnessNone && !s.LastActivity.Before(cutoff) {
+			seen[s.Harness] = true
 		}
 	}
-	return false
+	var out []Harness
+	for _, h := range harnesses {
+		if seen[h] {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // harnessProcess is one running coding-agent process, as the scan found it.
@@ -109,6 +108,11 @@ type harnessProcess struct {
 	// breadcrumbs after this; see ompTerminalID.
 	terminal string
 	orphan   bool // parent shell or IDE is gone and init adopted it
+	// desktopHost marks the Codex desktop app's own process rather than a
+	// session: the desktop app keeps its sessions in one long-lived process with
+	// no folder of its own, so its presence is the only evidence csm has that
+	// a desktop session is open. It has no cwd and pairs with no log directly.
+	desktopHost bool
 }
 
 // pidsByDir groups one harness's processes into the buckets its session store
@@ -122,7 +126,8 @@ type harnessProcess struct {
 func pidsByDir(procs []harnessProcess, h Harness, key func(cwd string) string) map[string][]int {
 	dirs := make(map[string][]int)
 	for _, p := range procs {
-		if p.harness != h {
+		// A desktop host has no folder, so it can only ever be keyed to "".
+		if p.harness != h || p.desktopHost {
 			continue
 		}
 		k := key(p.cwd)
@@ -158,6 +163,7 @@ var interpreters = map[string]bool{"bun": true, "node": true, "deno": true}
 func harnessCandidate(comm string) bool {
 	if strings.HasSuffix(comm, "claude") ||
 		strings.HasSuffix(comm, "omp") ||
+		strings.HasSuffix(comm, "codex") ||
 		interpreters[comm] {
 		return true
 	}
@@ -210,6 +216,11 @@ func classifyProcess(argv []string) Harness {
 		return HarnessClaude
 	case "omp":
 		return HarnessOMP
+	case "codex":
+		if codexServerProcess(argv) {
+			return HarnessNone
+		}
+		return HarnessCodex
 	}
 
 	if !interpreters[filepath.Base(argv[0])] {
@@ -229,6 +240,29 @@ func classifyProcess(argv []string) Harness {
 		}
 	}
 	return HarnessNone
+}
+
+// codexServers are the codex subcommands that run a background server rather
+// than a session. `codex app-server` is the shared process terminal sessions
+// hand their thread to, and the one the desktop app and editor plugins start;
+// it outlives the sessions it served, sits in no session's folder, and pairing
+// it to a rollout by directory would report a closed session as running.
+var codexServers = map[string]bool{"app-server": true, "mcp-server": true}
+
+// codexServerProcess reports whether a codex argv runs one of codexServers.
+// Every element is checked, not only argv[1], because the desktop app starts
+// the server with config overrides first (`codex -c key=value app-server`).
+//
+// ponytail: a session started with a prompt that is exactly "app-server" would
+// be read as the server. A prompt is a single argv element that would have to
+// equal the word, nothing more.
+func codexServerProcess(argv []string) bool {
+	for _, a := range argv[1:] {
+		if codexServers[a] {
+			return true
+		}
+	}
+	return false
 }
 
 // namesAgentExecutable reports whether an argv element names the agent's own

@@ -49,9 +49,10 @@ type cachedParse[T any] struct {
 }
 
 var (
-	parseCacheMu  sync.Mutex
-	parseCache    = map[string]cachedParse[parsedLog]{}
-	ompParseCache = map[string]cachedParse[ompParsedLog]{}
+	parseCacheMu    sync.Mutex
+	parseCache      = map[string]cachedParse[parsedLog]{}
+	ompParseCache   = map[string]cachedParse[ompParsedLog]{}
+	codexParseCache = map[string]cachedParse[codexParsedLog]{}
 )
 
 // isFatalParseError reports whether a parseLogFile error means the result has
@@ -93,6 +94,13 @@ func cachedParseOMPLogFile(logFile string, modTime time.Time, size int64) (ompPa
 		func() (ompParsedLog, error) { return parseOMPLogFile(logFile, keep) })
 }
 
+// cachedParseCodexLogFile is cachedParseLogFile for Codex rollouts, with keep
+// fixed for the same reason cachedParseOMPLogFile fixes it.
+func cachedParseCodexLogFile(logFile string, modTime time.Time, size int64) (codexParsedLog, error) {
+	return cachedParseFile(codexParseCache, logFile, modTime, size,
+		func() (codexParsedLog, error) { return parseCodexLogFile(logFile, codexKeep) })
+}
+
 // cachedParseFile is the shared cache policy: serve an unchanged file from the
 // map, otherwise parse outside the lock and store.
 func cachedParseFile[T parsedEntries](cache map[string]cachedParse[T], logFile string,
@@ -127,6 +135,7 @@ func pruneParseCache(liveFiles map[string]struct{}) {
 	defer parseCacheMu.Unlock()
 	pruneCache(parseCache, liveFiles)
 	pruneCache(ompParseCache, liveFiles)
+	pruneCache(codexParseCache, liveFiles)
 }
 
 // pruneCache drops one cache's entries for files not in liveFiles. Callers hold

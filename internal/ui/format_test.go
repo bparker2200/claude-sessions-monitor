@@ -77,7 +77,10 @@ func TestFormatOriginReadsAgentThenWhere(t *testing.T) {
 		want   string
 	}{
 		{session.Origin{Display: "Ghostty", Category: session.OriginTerminal}, session.HarnessClaude, "Claude · Ghostty"},
-		{session.Origin{Display: "Claude Desktop", Category: session.OriginDesktop}, session.HarnessClaude, "Claude · Desktop"},
+		{session.Origin{App: "claude-desktop", Display: "Claude Desktop", Category: session.OriginDesktop}, session.HarnessClaude, "Claude · Desktop"},
+		{session.Origin{App: "codex-desktop", Display: "Codex Desktop", Category: session.OriginDesktop}, session.HarnessCodex, "Codex · Desktop"},
+		// A Codex session in Claude Desktop's terminal is not the Codex desktop app.
+		{session.Origin{App: "claude-desktop", Display: "Claude Desktop", Category: session.OriginDesktop}, session.HarnessCodex, "Codex · Claude Des"},
 		{session.Origin{}, session.HarnessClaude, "Claude"},
 		{session.Origin{}, "", "—"},
 		{session.Origin{Display: "GNOME Terminal", Category: session.OriginTerminal}, session.HarnessClaude, "Claude · GNOME Ter"},

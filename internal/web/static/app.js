@@ -1650,6 +1650,8 @@
                 return 'Claude Code';
             case 'omp':
                 return 'Oh My Pi';
+            case 'codex':
+                return 'Codex';
             default:
                 return harness;
         }

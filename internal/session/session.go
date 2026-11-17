@@ -312,6 +312,14 @@ func getRunningHarnessProcs() ([]harnessProcess, map[string]registryEntry, bool,
 func identifyHarnessProcs(rows []procInfo) []harnessProcess {
 	var agents []harnessProcess
 	for _, row := range rows {
+		// The Codex desktop app runs its sessions inside its own process,
+		// which has no session folder and no argv csm would recognise. Its
+		// accounting name is what marks it, so it is caught before the agent
+		// prefilter rather than by it.
+		if codexDesktopHosts[row.comm] {
+			agents = append(agents, harnessProcess{pid: row.pid, harness: HarnessCodex, desktopHost: true})
+			continue
+		}
 		// comm narrows the table to the few pids worth a second read; argv is
 		// what actually identifies the process. Discovery and the pre-SIGTERM
 		// recheck in KillGhostProcesses run the same classifyProcess over the
@@ -366,6 +374,11 @@ func registryCwds(registry map[string]registryEntry) map[int]string {
 func resolveHarnessProcs(agents []harnessProcess, knownCwds map[int]string) []harnessProcess {
 	procs := make([]harnessProcess, 0, len(agents))
 	for _, a := range agents {
+		// A desktop host has no folder to resolve; its presence is the fact.
+		if a.desktopHost {
+			procs = append(procs, a)
+			continue
+		}
 		cwd, known := knownCwds[a.pid]
 		if !known {
 			var err error
@@ -546,6 +559,7 @@ func Discover() ([]Session, error) {
 	// returns the same []Session, which is why every view downstream needs no
 	// idea that more than one agent exists.
 	sessions = append(sessions, discoverOMP(procs, liveFiles)...)
+	sessions = append(sessions, discoverCodex(procs, liveFiles)...)
 
 	// Evict parse-cache entries for logs no longer in the active set, keeping the
 	// cache bounded to the current working set over a long-running server.

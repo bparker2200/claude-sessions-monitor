@@ -229,11 +229,11 @@ func upgradeConflicts(fs *flag.FlagSet) error {
 // you want to read right now is a property of the moment, not of how csm was
 // started. A flag would also have had to mean something for the web dashboard,
 // which has no key to press to undo it and serves more than one client.
-func nextHarnessFilter(current session.Harness) session.Harness {
-	// "" ends the cycle, so the roster plus one empty is the whole ring.
-	// slices.Index gives -1 for a harness no longer listed, which -- like "",
-	// the last item -- lands on the first roster entry and restarts it.
-	ring := append(session.Harnesses(), "")
+func nextHarnessFilter(current session.Harness, present []session.Harness) session.Harness {
+	// "" ends the cycle, so the agents present plus one empty is the whole
+	// ring. slices.Index gives -1 for a harness no longer present, which --
+	// like "", the last item -- lands on the first entry and restarts it.
+	ring := append(slices.Clone(present), "")
 	return ring[(slices.Index(ring, current)+1)%len(ring)]
 }
 
@@ -316,6 +316,8 @@ func runLiveView(interval time.Duration, webEnabled bool, webPort int) (code int
 	// The `f` handler reads it so the key is inert on a single-agent machine,
 	// which is what the footer promises by not advertising it there.
 	mixed := false
+	// The agents the `f` key cycles through: those with a recent session.
+	var present []session.Harness
 
 	// Check for a newer release off the render path: upgrade.Notice blocks on
 	// the network, and a frame must never wait on github.com. The result
@@ -401,7 +403,8 @@ func runLiveView(interval time.Duration, webEnabled bool, webPort int) (code int
 			// the table under the user. session.MixedHarnesses bounds it by
 			// recency instead, and the `-l` listing and web dashboard ask it the
 			// same way, so the three surfaces cannot disagree.
-			mixed = session.MixedHarnesses(sessions)
+			present = session.RecentHarnesses(sessions)
+			mixed = len(present) > 1
 			sessions = ui.FilterByHarness(sessions, filter)
 			// Sessions come and go between frames, so the selection is clamped
 			// on every render rather than only when a key moves it.
@@ -523,7 +526,7 @@ func runLiveView(interval time.Duration, webEnabled bool, webPort int) (code int
 				// key on `mixed` alone left the rows hidden with nothing able to
 				// bring them back short of restarting csm.
 				if viewMode == ViewModeLive && (mixed || filter != "") {
-					filter = nextHarnessFilter(filter)
+					filter = nextHarnessFilter(filter, present)
 					// The row count changes with the filter, so a selection
 					// carried over would point at a different session.
 					selected = -1

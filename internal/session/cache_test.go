@@ -30,7 +30,11 @@ func resetParseCache() {
 	parseCacheMu.Lock()
 	parseCache = map[string]cachedParse[parsedLog]{}
 	ompParseCache = map[string]cachedParse[ompParsedLog]{}
+	codexParseCache = map[string]cachedParse[codexParsedLog]{}
 	parseCacheMu.Unlock()
+	codexNames.Lock()
+	codexNames.byID = nil
+	codexNames.Unlock()
 	flagScanMu.Lock()
 	flagScanCache = map[string]flagScan{}
 	flagScanMu.Unlock()
