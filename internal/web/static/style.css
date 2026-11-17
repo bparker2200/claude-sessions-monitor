@@ -406,9 +406,10 @@ nav {
     display: inline-block;
 }
 
-.status-dot.working { background: var(--green); }
-.status-dot.needs-input { background: var(--yellow); }
-.status-dot.waiting { background: var(--blue); }
+/* Red is Needs you alone; Idle is the good outcome; Working needs nothing yet. */
+.status-dot.working { background: var(--text); }
+.status-dot.needs-input { background: var(--red); }
+.status-dot.waiting { background: var(--green); }
 .status-dot.inactive { background: var(--text-dim); }
 
 /* Usage view */
@@ -762,9 +763,9 @@ main {
     text-align: center;
 }
 
-.session-status.working { color: var(--green); }
-.session-status.needs-input { color: var(--yellow); }
-.session-status.waiting { color: var(--blue); }
+.session-status.working { color: var(--text); }
+.session-status.needs-input { color: var(--red); }
+.session-status.waiting { color: var(--green); }
 .session-status.inactive { color: var(--text-dim); }
 
 /* Carries a project's identity on a card that has no header of its own to

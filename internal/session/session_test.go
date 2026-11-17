@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -406,6 +407,35 @@ func TestLogEntryNewFields(t *testing.T) {
 	}
 	if entry2.CustomTitle != "add-linux-support" {
 		t.Errorf("CustomTitle = %q, want %q", entry2.CustomTitle, "add-linux-support")
+	}
+}
+
+// A session nobody named still has a name to show: Claude Code's generated
+// title. A name the user chose always wins over it, whichever came first in
+// the log, or a rename would be overridden by the generator.
+func TestSessionTitleFallsBackToTheGeneratedTitle(t *testing.T) {
+	dir := t.TempDir()
+	parse := func(name string, lines []string) parsedLog {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		writeLines(t, path, lines)
+		pl, err := parseLogFile(path, 100)
+		if err != nil {
+			t.Fatalf("parseLogFile: %v", err)
+		}
+		return pl
+	}
+	ai := `{"type":"ai-title","aiTitle":"Fix the flaky test","sessionId":"s"}`
+	custom := `{"type":"custom-title","customTitle":"Weekly review","sessionId":"s"}`
+
+	if got := parse("unnamed.jsonl", []string{ai}).displayTitle(); got != "Fix the flaky test" {
+		t.Errorf("unnamed session shows %q, want the generated title", got)
+	}
+	if got := parse("renamed.jsonl", []string{custom, ai}).displayTitle(); got != "Weekly review" {
+		t.Errorf("named session shows %q; the generated title overrode the user's name", got)
+	}
+	if got := parse("bare.jsonl", []string{`{"type":"user","sessionId":"s"}`}).displayTitle(); got != "" {
+		t.Errorf("session with no title shows %q, want none", got)
 	}
 }
 

@@ -60,7 +60,7 @@ func RenderList(sessions []session.Session) {
 	}
 
 	showHarness := session.MixedHarnesses(sessions)
-	l := calcSessionLayout(getTerminalWidth(), showHarness)
+	l := calcSessionLayout(getTerminalWidth())
 
 	var buf strings.Builder
 	buf.WriteString(sessionHeader(l, "") + "\n")
@@ -95,22 +95,21 @@ func FilterByHarness(sessions []session.Session, h session.Harness) []session.Se
 // unselectedMarker in the live view, "" for one-shot output that has no
 // selection to show.
 func sessionHeader(l sessionLayout, gutter string) string {
-	activity := l.activity - len([]rune(gutter))
-	if l.origin > 0 {
-		return fmt.Sprintf("%s%-*s %-*s %-*s %-*s %-*s",
-			gutter,
-			l.status, "STATUS",
-			l.project, "PROJECT",
-			l.origin, "ORIGIN",
-			l.context, "CONTEXT",
-			activity, "LAST ACTIVITY")
+	// The gutter is carved out of the session column, the same as in the rows.
+	sessionWidth := l.session - len([]rune(gutter))
+	if sessionWidth < 1 {
+		sessionWidth = 1
 	}
-	return fmt.Sprintf("%s%-*s %-*s %-*s %-*s",
-		gutter,
-		l.status, "STATUS",
-		l.project, "PROJECT",
-		l.context, "CONTEXT",
-		activity, "LAST ACTIVITY")
+	cols := []string{fmt.Sprintf("%-*s", sessionWidth, "SESSION")}
+	if l.origin > 0 {
+		cols = append(cols, fmt.Sprintf("%-*s", l.origin, "ORIGIN"))
+	}
+	cols = append(cols,
+		fmt.Sprintf("%-*s", l.project, "PROJECT"),
+		fmt.Sprintf("%-*s", l.context, "CONTEXT"),
+		fmt.Sprintf("%-*s", l.status, "STATUS"),
+		fmt.Sprintf("%-*s", l.idle, "IDLE FOR"))
+	return gutter + strings.Join(cols, " ")
 }
 
 // RenderJSON renders sessions as JSON
@@ -205,9 +204,13 @@ func RenderLive(v LiveView) {
 
 	// Status summary (only active sessions)
 	counts := countByStatus(active)
-	fmt.Fprintf(&buf, "%s%s Needs Input: %d%s  ", Yellow, SymbolNeedsInput, counts[session.StatusNeedsInput], Reset)
-	fmt.Fprintf(&buf, "%s%s Working: %d%s  ", Green, SymbolWorking, counts[session.StatusWorking], Reset)
-	fmt.Fprintf(&buf, "%s%s Waiting: %d%s", Blue, SymbolWaiting, counts[session.StatusWaiting], Reset)
+	for i, st := range []session.Status{session.StatusNeedsInput, session.StatusWorking, session.StatusWaiting} {
+		if i > 0 {
+			buf.WriteString("  ")
+		}
+		symbol, color := getStatusDisplay(st)
+		fmt.Fprintf(&buf, "%s%s %s: %d%s", color, symbol, statusLabel(st), counts[st], Reset)
+	}
 	buf.WriteString(rawNewline)
 
 	buf.WriteString(rawNewline)
@@ -215,7 +218,7 @@ func RenderLive(v LiveView) {
 	if len(active) == 0 {
 		fmt.Fprintf(&buf, "%s%s%s%s", Dim, emptyLiveMessage(v.Filter), Reset, rawNewline)
 	} else {
-		l := calcSessionLayout(getTerminalWidth(), v.Mixed)
+		l := calcSessionLayout(getTerminalWidth())
 
 		// Column headers
 		fmt.Fprintf(&buf, "%s%s", sessionHeader(l, unselectedMarker), rawNewline)
@@ -381,17 +384,17 @@ func ResetTerminalTitle() {
 func buildTerminalTitle(sessions []session.Session) string {
 	counts := countByStatus(ActiveSessions(sessions))
 
-	// Priority: Needs Input > Working > Waiting
+	// Priority: Needs you > Working > Idle
 	var parts []string
 
 	if n := counts[session.StatusNeedsInput]; n > 0 {
-		parts = append(parts, fmt.Sprintf("%d needs input", n))
+		parts = append(parts, fmt.Sprintf("%d need you", n))
 	}
 	if n := counts[session.StatusWorking]; n > 0 {
 		parts = append(parts, fmt.Sprintf("%d working", n))
 	}
 	if n := counts[session.StatusWaiting]; n > 0 {
-		parts = append(parts, fmt.Sprintf("%d waiting", n))
+		parts = append(parts, fmt.Sprintf("%d idle", n))
 	}
 
 	if len(parts) == 0 {
@@ -402,14 +405,18 @@ func buildTerminalTitle(sessions []session.Session) string {
 }
 
 // getStatusDisplay returns the symbol and color for a status
+//
+// Red is reserved for Needs you, the one state that wants something from the
+// user. Idle is green because a finished turn is the good outcome; Working is
+// left uncoloured because there is nothing to do about it yet.
 func getStatusDisplay(status session.Status) (string, string) {
 	switch status {
 	case session.StatusWorking:
-		return SymbolWorking, Green
+		return SymbolWorking, Reset
 	case session.StatusNeedsInput:
-		return SymbolNeedsInput, Yellow
+		return SymbolNeedsInput, Red
 	case session.StatusWaiting:
-		return SymbolWaiting, Blue
+		return SymbolWaiting, Green
 	case session.StatusInactive:
 		return SymbolInactive, Dim
 	default:
@@ -417,11 +424,29 @@ func getStatusDisplay(status session.Status) (string, string) {
 	}
 }
 
+// statusLabel is the word the terminal shows for a status.
+//
+// The Status values themselves are not renamed: they are the JSON API and the
+// web dashboard's vocabulary too, and "Waiting" meaning "finished its turn" is
+// what this label exists to stop the terminal from saying. Only the words a
+// person reads change here.
+func statusLabel(status session.Status) string {
+	switch status {
+	case session.StatusNeedsInput:
+		return "Needs you"
+	case session.StatusWaiting:
+		return "Idle"
+	default:
+		return string(status)
+	}
+}
+
 // formatStatus formats the status cell with symbol and padding to exact width
 func formatStatus(status session.Status, width int) string {
 	symbol, color := getStatusDisplay(status)
-	text := symbol + " " + string(status)
-	visibleLen := 2 + len(string(status)) // symbol(1) + space(1) + status text
+	label := statusLabel(status)
+	text := symbol + " " + label
+	visibleLen := 2 + utf8.RuneCountInString(label) // symbol(1) + space(1) + label
 
 	// Pad to width
 	if visibleLen < width {
@@ -551,36 +576,41 @@ func formatContext(s session.Session, width int) string {
 	return bar
 }
 
-// formatOrigin renders the origin cell, padded to exactly width visible chars.
-// Returns an empty string when the column is disabled (width == 0).
+// blank is what a cell shows when the fact it would hold is not on disk.
+const blank = "—"
+
+// padCell pads already-coloured text to width visible runes, given how many
+// visible runes it holds.
+func padCell(cell string, visible, width int) string {
+	if visible < width {
+		cell += strings.Repeat(" ", width-visible)
+	}
+	return cell
+}
+
+// originWhere is the "where" half of the origin cell: the app the session runs
+// in. A desktop app is shortened to "Desktop", because the agent half already
+// names whose desktop it is ("Claude · Desktop", not "Claude · Claude Desktop").
+func originWhere(o session.Origin) string {
+	if o.Category == session.OriginDesktop {
+		return "Desktop"
+	}
+	return o.Display
+}
+
+// formatOrigin renders the origin cell as "Agent · Where", padded to exactly
+// width visible chars, or "" when the column is disabled (width == 0).
 //
-// The agent badge follows the origin name, one space behind it: the origin is
-// this column's subject and the badge qualifies it, so it has to read as
-// attached to the name. Padding the name to a fixed width first would line the
-// badges up into a column of their own, which is the opposite -- it reads as a
-// separate field again, which is what moving it here was meant to fix. All the
-// slack goes to the right of the cell instead, exactly as formatProject does
-// with its own suffixes.
-func formatOrigin(s session.Session, width int, showHarness bool) string {
+// The agent is always named, not only when several agents are running: which
+// agent a session belongs to and what launched it are one fact about where it
+// came from. An origin csm could not detect leaves the agent on its own.
+func formatOrigin(s session.Session, width int) string {
 	if width <= 0 {
 		return ""
 	}
 
-	// The name is capped so the longest badge still fits; harnessBadgeWidth is
-	// what calcSessionLayout added to the column for it.
-	nameWidth := width
-	if showHarness {
-		nameWidth -= harnessBadgeWidth
-	}
-	if nameWidth < 1 {
-		nameWidth = 1
-	}
-
-	text := s.Origin.Display
-	if text == "" {
-		text = "-"
-	}
-	text = cutRunes(text, nameWidth)
+	agent := agentName(s.Harness)
+	where := sanitizeForTerminal(originWhere(s.Origin))
 
 	var color string
 	switch s.Origin.Category {
@@ -594,77 +624,145 @@ func formatOrigin(s session.Session, width int, showHarness bool) string {
 		color = Dim
 	}
 
-	cell := color + text + Reset
-	visible := utf8.RuneCountInString(text)
-
-	if showHarness && s.Harness != "" {
-		badge := "[" + harnessLabel(s.Harness) + "]"
-		cell += " " + Dim + badge + Reset
-		visible += 1 + utf8.RuneCountInString(badge)
+	switch {
+	case agent == "" && where == "":
+		return padCell(Dim+blank+Reset, 1, width)
+	case where == "":
+		agent = cutRunes(agent, width)
+		return padCell(agent, utf8.RuneCountInString(agent), width)
+	case agent == "":
+		where = cutRunes(where, width)
+		return padCell(color+where+Reset, utf8.RuneCountInString(where), width)
 	}
 
-	if visible < width {
-		cell += strings.Repeat(" ", width-visible)
+	const sep = " · "
+	agent = cutRunes(agent, width)
+	room := width - utf8.RuneCountInString(agent) - utf8.RuneCountInString(sep)
+	if room < 1 {
+		return padCell(agent, utf8.RuneCountInString(agent), width)
 	}
-	return cell
+	where = cutRunes(where, room)
+	cell := agent + Dim + sep + Reset + color + where + Reset
+	visible := utf8.RuneCountInString(agent) + utf8.RuneCountInString(sep) + utf8.RuneCountInString(where)
+	return padCell(cell, visible, width)
 }
 
-// renderSessionRow renders a single session row using the given layout.
-// The main row shows status, project, origin (optional), context, and activity.
-// A second indented line shows the last message using the full width, followed
-// by any subagent rows. marker fills the left gutter; its width is carved out
-// of the row, so selected and unselected markers must be the same width.
-func renderSessionRow(buf *strings.Builder, s session.Session, l sessionLayout, nl string, marker string,
-	showHarness bool) {
-	activity := formatElapsed(time.Since(s.LastActivity))
-	if s.Status == session.StatusWorking {
-		activity = "Now"
+// shortID is the part of a session id the session cell shows: enough to tell
+// sessions apart and to find the log, without the full 36 characters.
+func shortID(id string) string {
+	return cutRunes(id, 8)
+}
+
+// formatSession renders the session cell: the session's name, then its short
+// id in parentheses, padded to width. A session with no name shows the blank
+// so the id still has something to qualify; the id is kept whole and the name
+// is what gets cut when space runs short.
+func formatSession(s session.Session, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	name := sanitizeForTerminal(s.SessionTitle)
+	nameColor := ""
+	if name == "" {
+		name, nameColor = blank, Dim
 	}
 
-	// The gutter is carved out of the activity column rather than added to the
+	id := ""
+	if s.SessionID != "" {
+		id = " (" + sanitizeForTerminal(shortID(s.SessionID)) + ")"
+	}
+	idLen := utf8.RuneCountInString(id)
+	if idLen >= width {
+		id, idLen = "", 0
+	}
+
+	name = truncate(name, width-idLen)
+	cell := nameColor + name + Reset
+	if id != "" {
+		cell += Dim + id + Reset
+	}
+	return padCell(cell, utf8.RuneCountInString(name)+idLen, width)
+}
+
+// idleFor renders how long an Idle session has been sitting since its last
+// turn, padded to width. Every other status shows the blank: "idle for" means
+// nothing while a session is working or waiting on the user.
+func idleFor(s session.Session, width int, now time.Time) string {
+	if s.Status != session.StatusWaiting || s.LastActivity.IsZero() {
+		return padCell(Dim+blank+Reset, 1, width)
+	}
+	text := cutRunes(formatIdleDuration(now.Sub(s.LastActivity)), width)
+	return padCell(text, utf8.RuneCountInString(text), width)
+}
+
+// formatIdleDuration is a compact two-unit duration: "45s", "42m", "3h 10m",
+// "2d 4h". Two units because "3h" hides whether the session has been idle for
+// three hours or nearly four.
+func formatIdleDuration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		if d < 0 {
+			d = 0
+		}
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
+	default:
+		return fmt.Sprintf("%dd %dh", int(d.Hours())/24, int(d.Hours())%24)
+	}
+}
+
+// lastTurnPrefix labels the second line of a session block: the text of the
+// session's last reply.
+const lastTurnPrefix = "last turn › "
+
+// renderSessionRow renders a single session row using the given layout.
+// The main row shows session name and id, origin (optional), project, context,
+// status and idle time. A second indented line shows the session's last reply,
+// followed by any subagent rows. marker fills the left gutter; its width is
+// carved out of the row, so selected and unselected markers must be the same
+// width.
+//
+// showHarness puts the agent tag in the project cell when the terminal is too
+// narrow for the origin column, which otherwise names the agent: on a mixed
+// dashboard an untagged row is an ambiguous row, whatever the width.
+func renderSessionRow(buf *strings.Builder, s session.Session, l sessionLayout, nl string, marker string,
+	showHarness bool) {
+	// The gutter is carved out of the session column rather than added to the
 	// row: calcSessionLayout already spends the full terminal width, so widening
 	// the row here would wrap every line.
 	gutter := len([]rune(marker))
-	activityWidth := l.activity - gutter
-	if activityWidth < 1 {
-		activityWidth = 1
+	sessionWidth := l.session - gutter
+	if sessionWidth < 1 {
+		sessionWidth = 1
 	}
 
-	var row string
+	cols := []string{formatSession(s, sessionWidth)}
 	if l.origin > 0 {
-		// The agent rides in the origin cell: both answer "where did this come
-		// from". When the terminal is too narrow for that column it falls back
-		// to the project cell rather than disappearing -- on a mixed dashboard
-		// an untagged row is an ambiguous row, whatever the width.
-		row = fmt.Sprintf("%s%s %s %s %s %-*s",
-			marker,
-			formatStatus(s.Status, l.status),
-			formatProject(s, l.project, false),
-			formatOrigin(s, l.origin, showHarness),
-			formatContext(s, l.context),
-			activityWidth, activity)
+		cols = append(cols, formatOrigin(s, l.origin), formatProject(s, l.project, false))
 	} else {
-		row = fmt.Sprintf("%s%s %s %s %-*s",
-			marker,
-			formatStatus(s.Status, l.status),
-			formatProject(s, l.project, showHarness),
-			formatContext(s, l.context),
-			activityWidth, activity)
+		cols = append(cols, formatProject(s, l.project, showHarness))
 	}
-	buf.WriteString(row + nl)
+	cols = append(cols,
+		formatContext(s, l.context),
+		formatStatus(s.Status, l.status),
+		idleFor(s, l.idle, time.Now()))
+	buf.WriteString(marker + strings.Join(cols, " ") + nl)
 
-	// Second line: last message aligned with status text (after "● ")
-	// Sanitize to prevent ANSI escape injection from log content
+	// Second line: the session's last reply, falling back to what it is doing
+	// when it has not replied yet. Sanitized: it is log content.
 	desc := sanitizeForTerminal(s.LastMessage)
 	if desc == "" {
 		desc = sanitizeForTerminal(s.Task)
 	}
 	if desc != "" && desc != "-" {
-		indent := gutter + 2 // gutter, then align with status text (after symbol + space)
-		msgWidth := l.totalWidth - indent
+		indent := gutter + 2
+		msgWidth := l.totalWidth - indent - utf8.RuneCountInString(lastTurnPrefix)
 		if msgWidth > 0 {
-			msg := truncate(desc, msgWidth)
-			fmt.Fprintf(buf, "%s%s%s%s", strings.Repeat(" ", indent), Dim, msg, Reset+nl)
+			fmt.Fprintf(buf, "%s%s%s%s%s", strings.Repeat(" ", indent),
+				Dim, lastTurnPrefix, truncate(desc, msgWidth), Reset+nl)
 		}
 	}
 
@@ -698,12 +796,8 @@ func renderSubagentRow(buf *strings.Builder, sa session.Subagent, l sessionLayou
 	}
 
 	// Label column absorbs everything the fixed columns don't use, so the
-	// activity column stays aligned with the parent table. The selection gutter
-	// is part of that fixed cost.
-	activityWidth := l.activity - gutter
-	if activityWidth < 1 {
-		activityWidth = 1
-	}
+	// activity lines up under the parent table's last column (IDLE FOR).
+	activityWidth := l.idle
 	labelWidth := l.totalWidth - gutter - subagentIndentLen - 2 - activityWidth - 1
 	if labelWidth < 1 {
 		labelWidth = 1
@@ -745,6 +839,19 @@ func harnessLabel(h session.Harness) string {
 	}
 }
 
+// agentName is how the origin cell names a harness: in words, because it reads
+// as the first half of "Claude · Ghostty" rather than as a badge.
+func agentName(h session.Harness) string {
+	switch h {
+	case session.HarnessClaude:
+		return "Claude"
+	case session.HarnessOMP:
+		return "omp"
+	default:
+		return string(h)
+	}
+}
+
 // formatProject formats the project name with optional indicators, padded to maxLen visible chars
 func formatProject(s session.Session, maxLen int, showHarness bool) string {
 	// Sanitize to prevent ANSI escape injection from log/filesystem content
@@ -771,10 +878,7 @@ func formatProject(s session.Session, maxLen int, showHarness bool) string {
 		add(Dim, "@"+cutRunes(sanitizeForTerminal(s.GitBranch), 12))
 	}
 
-	// Add session title if present
-	if s.SessionTitle != "" {
-		add(Dim, "\""+cutRunes(sanitizeForTerminal(s.SessionTitle), 20)+"\"")
-	}
+	// The session title is not repeated here: it has the SESSION column.
 
 	// Ghost indicator (highest priority warning)
 	if s.IsGhost {

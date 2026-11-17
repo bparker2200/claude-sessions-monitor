@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yepzdk/claude-sessions-monitor/internal/session"
 )
@@ -50,82 +51,151 @@ func TestFormatProjectPadsToRuneWidth(t *testing.T) {
 	}
 }
 
-// The cell is padded to a fixed width whether or not the badge is in it, or
-// every column to its right shifts on a mixed dashboard.
+// Every cell is padded to its column's width whatever it holds, or every
+// column to its right shifts.
 func TestFormatOriginPadsToRuneWidth(t *testing.T) {
-	for _, showHarness := range []bool{false, true} {
-		width := fixedOriginWidth
-		if showHarness {
-			width += harnessBadgeWidth
-		}
-		for _, display := range []string{"Ghostty", "", "iTerm", "Zed", "Ünicode", "非常長的名字"} {
-			s := session.Session{
-				Origin:  session.Origin{Display: display},
-				Harness: session.HarnessOMP,
-			}
-			got := visibleWidth(formatOrigin(s, width, showHarness))
-			if got != width {
-				t.Errorf("origin %q (harness=%v): visible width = %d, want %d",
-					display, showHarness, got, width)
+	for _, h := range []session.Harness{session.HarnessClaude, session.HarnessOMP, ""} {
+		for _, display := range []string{"Ghostty", "", "iTerm", "GNOME Terminal", "Ünicode", "非常長的名字"} {
+			s := session.Session{Origin: session.Origin{Display: display}, Harness: h}
+			if got := visibleWidth(formatOrigin(s, fixedOriginWidth)); got != fixedOriginWidth {
+				t.Errorf("origin %q (agent %q): visible width = %d, want %d", display, h, got, fixedOriginWidth)
 			}
 		}
 	}
 }
 
-// The agent badge belongs with the origin -- both answer "where did this come
-// from" -- but after it, one space behind: the origin is the column's subject
-// and the badge qualifies it, so it has to read as attached to the name rather
-// than as a field of its own.
-func TestFormatOriginCarriesHarnessAfterTheName(t *testing.T) {
-	const width = fixedOriginWidth + harnessBadgeWidth
-	cell := func(display string, h session.Harness) string {
-		return stripANSI(formatOrigin(session.Session{
-			Origin:  session.Origin{Display: display, Category: session.OriginTerminal},
-			Harness: h,
-		}, width, true))
+// The origin cell names the agent and where it runs, as one phrase. A desktop
+// app is shortened so the agent is not named twice, and an undetected origin
+// leaves the agent standing alone rather than a dangling separator.
+func TestFormatOriginReadsAgentThenWhere(t *testing.T) {
+	cell := func(o session.Origin, h session.Harness) string {
+		return strings.TrimRight(stripANSI(formatOrigin(session.Session{Origin: o, Harness: h}, fixedOriginWidth)), " ")
+	}
+	for _, tc := range []struct {
+		origin session.Origin
+		h      session.Harness
+		want   string
+	}{
+		{session.Origin{Display: "Ghostty", Category: session.OriginTerminal}, session.HarnessClaude, "Claude · Ghostty"},
+		{session.Origin{Display: "Claude Desktop", Category: session.OriginDesktop}, session.HarnessClaude, "Claude · Desktop"},
+		{session.Origin{}, session.HarnessClaude, "Claude"},
+		{session.Origin{}, "", "—"},
+		{session.Origin{Display: "GNOME Terminal", Category: session.OriginTerminal}, session.HarnessClaude, "Claude · GNOME Ter"},
+	} {
+		if got := cell(tc.origin, tc.h); got != tc.want {
+			t.Errorf("origin %+v, agent %q: cell = %q, want %q", tc.origin, tc.h, got, tc.want)
+		}
+	}
+}
+
+// The session cell is the name, then the short id. A long name is what gets
+// cut, never the id, which is how the session is found again; a session with
+// no name shows the blank, not an empty cell.
+func TestFormatSessionKeepsTheIDAndCutsTheName(t *testing.T) {
+	const width = 30
+	id := "5e6f7a8b-1111-2222-3333-444455556666"
+
+	got := stripANSI(formatSession(session.Session{SessionTitle: "Weekly review", SessionID: id}, width))
+	if !strings.HasPrefix(got, "Weekly review (5e6f7a8b)") || visibleWidth(got) != width {
+		t.Errorf("named session cell = %q (width %d), want %q padded to %d",
+			got, visibleWidth(got), "Weekly review (5e6f7a8b)", width)
 	}
 
-	got := cell("Ghostty", session.HarnessOMP)
-	if !strings.HasPrefix(got, "Ghostty [omp]") {
-		t.Errorf("cell = %q, want the badge one space after the origin name", got)
-	}
-	if visibleWidth(got) != width {
-		t.Errorf("visible width = %d, want %d; the columns after it shift",
-			visibleWidth(got), width)
+	long := stripANSI(formatSession(session.Session{SessionTitle: strings.Repeat("Long matter name ", 4), SessionID: id}, width))
+	if !strings.HasSuffix(strings.TrimRight(long, " "), "(5e6f7a8b)") || visibleWidth(long) != width {
+		t.Errorf("long name cell = %q; the id was cut or the cell is not %d wide", long, width)
 	}
 
-	// A shorter origin keeps the badge next to it rather than parked at a
-	// column position of its own.
-	short := cell("Zed", session.HarnessClaude)
-	if !strings.HasPrefix(short, "Zed [cc]") {
-		t.Errorf("cell = %q, want %q", short, "Zed [cc]")
+	unnamed := stripANSI(formatSession(session.Session{SessionID: id}, width))
+	if !strings.HasPrefix(unnamed, "— (5e6f7a8b)") {
+		t.Errorf("unnamed session cell = %q, want the blank before the id", unnamed)
 	}
-	if visibleWidth(short) != width {
-		t.Errorf("short cell width = %d, want %d", visibleWidth(short), width)
-	}
+}
 
-	// The name is capped so the longest badge still fits the widened column.
-	long := cell("GNOME Terminal", session.HarnessOMP)
-	if !strings.HasPrefix(long, "GNOME Term [omp]") {
-		t.Errorf("cell = %q; the name should cap at %d to leave room", long, fixedOriginWidth)
+// The terminal says Needs you / Working / Idle; Needs you alone is red. The
+// Status values underneath are the API's and must not change.
+func TestStatusWordsAndColours(t *testing.T) {
+	for _, tc := range []struct {
+		status session.Status
+		word   string
+		color  string
+	}{
+		{session.StatusNeedsInput, "Needs you", Red},
+		{session.StatusWorking, "Working", Reset},
+		{session.StatusWaiting, "Idle", Green},
+	} {
+		if got := statusLabel(tc.status); got != tc.word {
+			t.Errorf("status %q reads %q, want %q", tc.status, got, tc.word)
+		}
+		if _, color := getStatusDisplay(tc.status); color != tc.color {
+			t.Errorf("status %q colour = %q, want %q", tc.status, color, tc.color)
+		}
+		if got := visibleWidth(formatStatus(tc.status, fixedStatusWidth)); got != fixedStatusWidth {
+			t.Errorf("status %q cell width = %d, want %d", tc.status, got, fixedStatusWidth)
+		}
 	}
+	if session.StatusWaiting != "Waiting" || session.StatusNeedsInput != "Needs Input" {
+		t.Error("an internal Status value was renamed; the JSON API and the web dashboard depend on them")
+	}
+}
 
-	plain := stripANSI(formatOrigin(session.Session{
-		Origin:  session.Origin{Display: "Ghostty"},
-		Harness: session.HarnessOMP,
-	}, fixedOriginWidth, false))
-	if strings.Contains(plain, "omp") {
-		t.Errorf("agent shown on a single-agent dashboard: %q", plain)
+// "Idle for" counts only on Idle rows; on a working or blocked session it would
+// be a number that means nothing.
+func TestIdleForShowsOnlyOnIdleRows(t *testing.T) {
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	last := now.Add(-(3*time.Hour + 10*time.Minute))
+	cell := func(st session.Status) string {
+		return strings.TrimRight(stripANSI(idleFor(session.Session{Status: st, LastActivity: last}, fixedIdleWidth, now)), " ")
 	}
-	if visibleWidth(plain) != fixedOriginWidth {
-		t.Errorf("single-agent cell width = %d, want the unchanged %d",
-			visibleWidth(plain), fixedOriginWidth)
+	if got := cell(session.StatusWaiting); got != "3h 10m" {
+		t.Errorf("idle session shows %q, want %q", got, "3h 10m")
+	}
+	for _, st := range []session.Status{session.StatusWorking, session.StatusNeedsInput} {
+		if got := cell(st); got != "—" {
+			t.Errorf("%s session shows idle time %q, want the blank", st, got)
+		}
+	}
+	for d, want := range map[time.Duration]string{
+		45 * time.Second:             "45s",
+		42 * time.Minute:             "42m",
+		50*time.Hour + 5*time.Minute: "2d 2h",
+	} {
+		if got := formatIdleDuration(d); got != want {
+			t.Errorf("formatIdleDuration(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+// A rendered row is exactly the terminal width, in both layouts, and the
+// second line is labelled as the session's last turn.
+func TestRenderSessionRowFillsTheWidthAndLabelsTheLastTurn(t *testing.T) {
+	s := session.Session{
+		Project:      "work/api",
+		Status:       session.StatusWaiting,
+		Harness:      session.HarnessClaude,
+		SessionTitle: "Weekly review",
+		SessionID:    "5e6f7a8b-1111-2222-3333-444455556666",
+		LastMessage:  "Done. Three items moved to next week.",
+		LastActivity: time.Now().Add(-42 * time.Minute),
+		Origin:       session.Origin{Display: "Ghostty", Category: session.OriginTerminal},
+	}
+	for _, width := range []int{120, originColumnMinTTY - 1} {
+		l := calcSessionLayout(width)
+		var buf strings.Builder
+		renderSessionRow(&buf, s, l, "\n", "  ", true)
+		lines := strings.Split(stripANSI(buf.String()), "\n")
+		if got := visibleWidth(lines[0]); got != width {
+			t.Errorf("width %d: row is %d wide, so it wraps or leaves a gap:\n%s", width, got, lines[0])
+		}
+		if !strings.Contains(lines[1], lastTurnPrefix+"Done. Three items") {
+			t.Errorf("width %d: second line = %q, want the last reply after %q", width, lines[1], lastTurnPrefix)
+		}
 	}
 }
 
 // Below originColumnMinTTY the origin column is dropped, and with it the cell
-// the agent now lives in. It has to fall back to the project cell: on a mixed
-// dashboard an untagged row is an ambiguous row, whatever the terminal width.
+// that names the agent. On a mixed dashboard the agent falls back to the
+// project cell: an untagged row is an ambiguous row, whatever the width.
 func TestRenderSessionRowKeepsHarnessOnNarrowTerminal(t *testing.T) {
 	s := session.Session{
 		Project: "work/api",
@@ -133,19 +203,9 @@ func TestRenderSessionRowKeepsHarnessOnNarrowTerminal(t *testing.T) {
 		Harness: session.HarnessOMP,
 		Origin:  session.Origin{Display: "Ghostty", Category: session.OriginTerminal},
 	}
-
-	wide := calcSessionLayout(120, true)
-	if wide.origin == 0 {
-		t.Fatal("120 columns should keep the origin column")
-	}
-	narrow := calcSessionLayout(originColumnMinTTY-1, true)
-	if narrow.origin != 0 {
-		t.Fatal("below originColumnMinTTY the origin column should be dropped")
-	}
-
-	for name, l := range map[string]sessionLayout{"wide": wide, "narrow": narrow} {
+	for name, width := range map[string]int{"wide": 120, "narrow": originColumnMinTTY - 1} {
 		var buf strings.Builder
-		renderSessionRow(&buf, s, l, "\n", "  ", true)
+		renderSessionRow(&buf, s, calcSessionLayout(width), "\n", "  ", true)
 		if !strings.Contains(stripANSI(buf.String()), "omp") {
 			t.Errorf("%s layout lost the agent label:\n%s", name, stripANSI(buf.String()))
 		}

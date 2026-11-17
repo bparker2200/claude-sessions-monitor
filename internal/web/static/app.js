@@ -335,9 +335,11 @@
     // session.Status defines; anything else sorts last and wears the Inactive
     // styling that statusClass falls back to.
     const STATUSES = [
-        { name: 'Needs Input', cls: 'needs-input', symbol: '\u25B2', word: 'needs input' },
+        // name is the API's status value and must match it; word is what a
+        // person reads. "Waiting" meaning a finished turn is what word fixes.
+        { name: 'Needs Input', cls: 'needs-input', symbol: '\u25B2', word: 'needs you' },
         { name: 'Working', cls: 'working', symbol: '\u25CF', word: 'working' },
-        { name: 'Waiting', cls: 'waiting', symbol: '\u25C9', word: 'waiting' },
+        { name: 'Waiting', cls: 'waiting', symbol: '\u25C9', word: 'idle' },
         { name: 'Inactive', cls: 'inactive', symbol: '\u25CC', word: 'stopped' },
     ];
     const STATUS_ORDER = STATUSES.map((s) => s.name);

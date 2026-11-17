@@ -1,66 +1,66 @@
 package ui
 
-// Column width constraints for session table
+// Column width constraints for the session table. Columns, left to right:
+// SESSION, ORIGIN, PROJECT, CONTEXT, STATUS, IDLE FOR. The session's last reply
+// is rendered on a second line, so it needs no column.
 const (
-	fixedStatusWidth = 14 // "● Needs Input" = 13 chars + 1 padding
-	fixedOriginWidth = 10 // "Claude Desktop" truncated; most origins fit in 9
-	// harnessBadgeWidth is what the origin column grows by when the agent badge
-	// is shown: a separating space plus the widest badge, "[omp]". The column is
-	// widened rather than shared, so the origin name -- the column's subject --
-	// keeps every character it had before csm watched a second agent.
-	harnessBadgeWidth  = 6
-	fixedContextWidth  = 21 // progress bar (10) + " 100%" (5) + " (1M)" suffix (5) + 1 padding
-	fixedActivityWidth = 15 // "LAST ACTIVITY" header + padding
-	minProjectWidth    = 15
-	originColumnMinTTY = 90 // drop the origin column below this terminal width
+	fixedOriginWidth  = 18 // "Claude · Ghostty" = 16; longer origins are cut
+	fixedContextWidth = 21 // progress bar (10) + " 100%" (5) + " (1M)" suffix (5) + 1 padding
+	fixedStatusWidth  = 12 // "▲ Needs you" = 11 + 1 padding
+	fixedIdleWidth    = 9  // "IDLE FOR" header; values like "23h 59m" fit
+	minProjectWidth   = 12
+	maxProjectWidth   = 28 // past this, extra width serves the session name better
+	minSessionWidth   = 14
+	// originColumnMinTTY is the terminal width below which the origin column is
+	// dropped, so the session name keeps room to be read.
+	originColumnMinTTY = 100
 )
 
 // sessionLayout holds the computed column widths for the session table.
-// Last message is rendered on a separate line, so no message column is needed.
 type sessionLayout struct {
-	status     int
-	project    int
+	session    int
 	origin     int
+	project    int
 	context    int
-	activity   int
+	status     int
+	idle       int
 	totalWidth int
 }
 
 // calcSessionLayout computes column widths for the given terminal width.
-// Fixed columns (status, origin, context, activity) keep their size.
-// All remaining space goes to the project column. The origin column is
-// dropped on narrow terminals to keep the project column readable.
-// Accounts for one separator space between each pair of adjacent columns.
 //
-// showHarness widens the origin column for the agent badge, so a machine
-// running a single agent gets exactly the columns it had before csm watched two.
-func calcSessionLayout(width int, showHarness bool) sessionLayout {
+// Origin, context, status and idle keep fixed widths. What remains is shared
+// between the session name and the project: the project takes about a
+// third, between minProjectWidth and maxProjectWidth, and the session name the
+// rest, because a name is the longer and more telling of the two. The origin
+// column is dropped on narrow terminals. One separator space sits between each
+// pair of adjacent columns.
+func calcSessionLayout(width int) sessionLayout {
 	l := sessionLayout{
-		status:   fixedStatusWidth,
-		context:  fixedContextWidth,
-		activity: fixedActivityWidth,
+		context: fixedContextWidth,
+		status:  fixedStatusWidth,
+		idle:    fixedIdleWidth,
 	}
+	gaps := 4 // session|project|context|status|idle
 	if width >= originColumnMinTTY {
 		l.origin = fixedOriginWidth
-		if showHarness {
-			l.origin += harnessBadgeWidth
-		}
+		gaps = 5
 	}
 
-	// One space between each pair of adjacent visible columns.
-	gaps := 3 // status|project|context|activity
-	if l.origin > 0 {
-		gaps = 4 // status|project|origin|context|activity
+	remaining := width - (l.origin + l.context + l.status + l.idle + gaps)
+	if remaining < minSessionWidth+minProjectWidth {
+		remaining = minSessionWidth + minProjectWidth
 	}
-	fixed := l.status + l.origin + l.context + l.activity + gaps
-	remaining := width - fixed
-	if remaining < 1 {
-		remaining = 1
+	l.project = remaining / 3
+	if l.project < minProjectWidth {
+		l.project = minProjectWidth
 	}
-	l.project = remaining
+	if l.project > maxProjectWidth {
+		l.project = maxProjectWidth
+	}
+	l.session = remaining - l.project
 
-	l.totalWidth = l.status + l.project + l.origin + l.context + l.activity + gaps
-
+	l.totalWidth = l.session + l.origin + l.project + l.context + l.status + l.idle + gaps
 	return l
 }
 

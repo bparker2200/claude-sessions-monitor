@@ -6,83 +6,55 @@ import (
 	"unicode/utf8"
 )
 
-func TestCalcSessionLayout_WideTerminal(t *testing.T) {
-	l := calcSessionLayout(140, false)
-
-	if l.status != 14 {
-		t.Errorf("expected status=14, got %d", l.status)
-	}
-	if l.origin != fixedOriginWidth {
-		t.Errorf("expected origin=%d, got %d", fixedOriginWidth, l.origin)
-	}
-	if l.context != fixedContextWidth {
-		t.Errorf("expected context=%d, got %d", fixedContextWidth, l.context)
-	}
-	if l.activity != 15 {
-		t.Errorf("expected activity=15, got %d", l.activity)
-	}
-	// Remaining space goes to project (minus 4 column gaps since origin column is present)
-	expectedProject := 140 - fixedStatusWidth - fixedOriginWidth - fixedContextWidth - fixedActivityWidth - 4
-	if l.project != expectedProject {
-		t.Errorf("expected project=%d, got %d", expectedProject, l.project)
-	}
-	if l.totalWidth != 140 {
-		t.Errorf("expected totalWidth=140, got %d", l.totalWidth)
+// Every width a session row uses has to add up to the terminal width, or the
+// row wraps and the table falls apart.
+func TestCalcSessionLayoutSpendsTheWholeWidth(t *testing.T) {
+	for _, width := range []int{80, 99, 100, 120, 140, 200} {
+		l := calcSessionLayout(width)
+		if l.totalWidth != width {
+			t.Errorf("width %d: columns add up to %d (session=%d origin=%d project=%d context=%d status=%d idle=%d); "+
+				"the row wraps or leaves a gap", width, l.totalWidth, l.session, l.origin, l.project, l.context, l.status, l.idle)
+		}
+		if l.context != fixedContextWidth || l.status != fixedStatusWidth || l.idle != fixedIdleWidth {
+			t.Errorf("width %d: a fixed column changed width (context=%d status=%d idle=%d)",
+				width, l.context, l.status, l.idle)
+		}
 	}
 }
 
-func TestCalcSessionLayout_NarrowTerminal(t *testing.T) {
-	// 80 < originColumnMinTTY, so origin column is hidden.
-	l := calcSessionLayout(80, false)
-
-	if l.status != 14 {
-		t.Errorf("expected status=14, got %d", l.status)
-	}
-	if l.origin != 0 {
-		t.Errorf("expected origin=0 at width=80, got %d", l.origin)
-	}
-	if l.totalWidth != 80 {
-		t.Errorf("expected totalWidth=80, got %d (status=%d project=%d origin=%d context=%d activity=%d)",
-			l.totalWidth, l.status, l.project, l.origin, l.context, l.activity)
-	}
-}
-
-func TestCalcSessionLayout_VeryNarrowTerminal(t *testing.T) {
-	l := calcSessionLayout(55, false)
-
-	if l.origin != 0 {
-		t.Errorf("expected origin=0 at width=55, got %d", l.origin)
-	}
-	if l.totalWidth != 55 {
-		t.Errorf("expected totalWidth=55, got %d", l.totalWidth)
+// The session name is the column you read first, so it gets the larger share
+// of the spare width, and the project stays within its bounds.
+func TestCalcSessionLayoutGivesTheNameTheLargerShare(t *testing.T) {
+	for _, width := range []int{100, 140, 200} {
+		l := calcSessionLayout(width)
+		if l.session <= l.project {
+			t.Errorf("width %d: session=%d project=%d; the name should get more room than the project",
+				width, l.session, l.project)
+		}
+		if l.project < minProjectWidth || l.project > maxProjectWidth {
+			t.Errorf("width %d: project=%d, want between %d and %d", width, l.project, minProjectWidth, maxProjectWidth)
+		}
 	}
 }
 
-func TestCalcSessionLayout_MinWidth(t *testing.T) {
-	l := calcSessionLayout(40, false)
-
-	// At tiny widths the origin column is dropped; project gets whatever remains (minus 3 gaps).
-	expected := 40 - fixedStatusWidth - fixedContextWidth - fixedActivityWidth - 3
-	if expected < 1 {
-		expected = 1
+// Below the threshold the origin column goes, so the session name keeps room.
+func TestCalcSessionLayoutOriginDropsAtBoundary(t *testing.T) {
+	if l := calcSessionLayout(originColumnMinTTY); l.origin != fixedOriginWidth {
+		t.Errorf("expected origin=%d at width=%d, got %d", fixedOriginWidth, originColumnMinTTY, l.origin)
 	}
-	if l.origin != 0 {
-		t.Errorf("expected origin=0 at width=40, got %d", l.origin)
-	}
-	if l.project != expected {
-		t.Errorf("expected project=%d, got %d", expected, l.project)
+	if l := calcSessionLayout(originColumnMinTTY - 1); l.origin != 0 {
+		t.Errorf("expected origin=0 at width=%d, got %d", originColumnMinTTY-1, l.origin)
 	}
 }
 
-func TestCalcSessionLayout_OriginDropsAtBoundary(t *testing.T) {
-	// At exactly the threshold, origin should appear; one below, it should vanish.
-	lOn := calcSessionLayout(originColumnMinTTY, false)
-	if lOn.origin != fixedOriginWidth {
-		t.Errorf("expected origin=%d at width=%d, got %d", fixedOriginWidth, originColumnMinTTY, lOn.origin)
-	}
-	lOff := calcSessionLayout(originColumnMinTTY-1, false)
-	if lOff.origin != 0 {
-		t.Errorf("expected origin=0 at width=%d, got %d", originColumnMinTTY-1, lOff.origin)
+// On a terminal too narrow for every column, the name and project keep their
+// minimums rather than shrinking to nothing; the row wraps instead of hiding
+// which session it is.
+func TestCalcSessionLayoutKeepsMinimumsWhenCrowded(t *testing.T) {
+	l := calcSessionLayout(40)
+	if l.session < minSessionWidth || l.project < minProjectWidth {
+		t.Errorf("session=%d project=%d at width 40; want at least %d and %d",
+			l.session, l.project, minSessionWidth, minProjectWidth)
 	}
 }
 

@@ -733,6 +733,7 @@ type parsedLog struct {
 	summary        string
 	cwd            string
 	title          string
+	aiTitle        string // Claude Code's generated title; used only when title is empty
 	lastMessage    string
 	gitBranch      string
 	contextPercent float64
@@ -741,6 +742,15 @@ type parsedLog struct {
 	// lastEntryTime is the most recent non-zero entry timestamp, used as
 	// LastActivity when present (falls back to file modTime otherwise).
 	lastEntryTime time.Time
+}
+
+// displayTitle is the session's name: the one the user set, or Claude Code's
+// generated one when nobody named it.
+func (pl parsedLog) displayTitle() string {
+	if pl.title != "" {
+		return pl.title
+	}
+	return pl.aiTitle
 }
 
 // parseLogFile scans a JSONL log file exactly once and extracts every field the
@@ -810,6 +820,11 @@ func parseLogFileWithLimit(logFile string, keep int, maxLineBytes int) (parsedLo
 		}
 		if t := extractStringField(line, `"customTitle":"`); t != "" {
 			pl.title = t
+		}
+		// Claude Code also writes a generated title for sessions nobody named.
+		// It is kept apart so a name the user chose always wins over it.
+		if t := extractStringField(line, `"aiTitle":"`); t != "" {
+			pl.aiTitle = t
 		}
 
 		// Most recent summary entry (summaries are cheap to detect first).
@@ -909,8 +924,8 @@ func applyParsedLog(session *Session, pl parsedLog, isRunning bool, pid int, orp
 		session.Project = extractProjectName(pl.cwd)
 		session.CWD = pl.cwd
 	}
-	if pl.title != "" {
-		session.SessionTitle = pl.title
+	if t := pl.displayTitle(); t != "" {
+		session.SessionTitle = t
 	}
 	session.Summary = pl.summary
 	session.LastMessage = pl.lastMessage
